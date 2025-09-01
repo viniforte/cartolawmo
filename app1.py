@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+
+# libs do plotly
 import plotly.express as px
 
-st.set_page_config(layout="wide")  # Layout mais amplo
-
+st.set_page_config(layout="wide")
 st.title("📊 Ranking Progressivo - Cartola FC")
 
 # Carregar planilha
@@ -15,14 +16,14 @@ df.rename(columns={df.columns[0]: "Time"}, inplace=True)
 df_long = df.melt(id_vars="Time", var_name="Rodada", value_name="Pontuação")
 df_long = df_long.dropna(subset=["Pontuação"])
 df_long = df_long[df_long["Pontuação"] > 0]
-df_long["Rodada_Num"] = df_long["Rodada"].str.replace("Rodada ", "").astype(int)
-df_long = df_long.sort_values(by=["Time", "Rodada_Num"])
+df_long["Rodada"] = df_long["Rodada"].str.replace("Rodada ", "").astype(int)
+df_long = df_long.sort_values(by=["Time", "Rodada"])
 
 # Pontuação acumulada
 df_long["Pontuação_Acumulada"] = df_long.groupby("Time")["Pontuação"].cumsum()
 
 # Ranking progressivo
-df_long["Posição"] = df_long.groupby("Rodada_Num")["Pontuação_Acumulada"]\
+df_long["Posição"] = df_long.groupby("Rodada")["Pontuação_Acumulada"]\
     .rank(method="min", ascending=False).astype(int)
 
 # Somatório total para legenda
@@ -38,48 +39,90 @@ times_selecionados = st.sidebar.multiselect(
 
 rodadas = st.sidebar.slider(
     "Escolha o número de rodadas",
-    min_value=int(df_long["Rodada_Num"].min()),
-    max_value=int(df_long["Rodada_Num"].max()),
-    value=int(df_long["Rodada_Num"].max())
+    min_value=int(df_long["Rodada"].min()),
+    max_value=int(df_long["Rodada"].max()),
+    value=int(df_long["Rodada"].max())
 )
 
-# Filtrar dados
+# Filtrar dados (usar .copy() pra evitar warnings)
 df_filtrado = df_long[
     (df_long["Time_Label"].isin(times_selecionados)) &
-    (df_long["Rodada_Num"] <= rodadas)
-]
+    (df_long["Rodada"] <= rodadas)
+].copy()
 
-# Criar coluna com rótulo apenas no último ponto da linha
-df_filtrado["Rotulo_Time"] = df_filtrado.groupby("Time")["Rodada_Num"].transform(
-    lambda x: x.eq(x.max())
-)
-df_filtrado["Rotulo_Time"] = df_filtrado.apply(
-    lambda row: row["Time"] if row["Rotulo_Time"] else "", axis=1
-)
+if df_filtrado.empty:
+    st.warning("Nenhum dado para o filtro selecionado.")
+else:
+    # plot base (sem text no trace)
+    fig = px.line(
+        df_filtrado,
+        x="Rodada",
+        y="Posição",
+        color="Time_Label",
+        markers=True,
+        line_group="Time_Label",
+        hover_data=["Pontuação", "Pontuação_Acumulada"],
+        title="Ranking Progressivo do Cartolas"
+    )
 
-# Gráfico
-fig = px.line(
-    df_filtrado,
-    x="Rodada_Num",
-    y="Posição",
-    color="Time_Label",
-    markers=True,
-    line_group="Time_Label",
-    text="Rotulo_Time",
-    hover_data=["Pontuação", "Pontuação_Acumulada"],
-    title="Ranking Progressivo do Cartolas"
-)
+    # permitir que elementos não sejam cortados
+    for trace in fig.data:
+        # garante que marcador/linha não sejam cortados pelo eixo
+        trace.update(cliponaxis=False)
 
-# Ajustes de rótulo e eixo
-fig.update_traces(mode="lines+markers+text", textposition="middle right")
-fig.update_yaxes(autorange="reversed", title="Posição a cada rodada")
+    # Ajuste dos eixos (forçar todos os ticks e inverter Y)
+    fig.update_yaxes(tickmode="linear", dtick=1, autorange="reversed", title="Posição durante o Campeonato")
+    fig.update_xaxes(tickmode="linear", dtick=1)
 
-# Layout maior
-fig.update_layout(
-    width=1200,
-    height=700,
-    xaxis=dict(title="Rodadas"),
-    margin=dict(l=100, r=50, t=80, b=120)
-)
+    # expandir o range do eixo X para deixar espaço à direita (não cortar labels)
+    xmin = int(df_filtrado["Rodada"].min())
+    xmax = int(df_filtrado["Rodada"].max())
+    # coloca um pequeno padding à direita (ex.: +1.2 rodadas)
+    fig.update_xaxes(range=[xmin - 0.5, xmax + 1.2])
 
-st.plotly_chart(fig, use_container_width=True)
+    # Preparar anotações: pegar o último ponto de cada time (depois do filtro)
+    df_last = df_filtrado.sort_values(["Time", "Rodada"]).groupby("Time").tail(1).copy()
+
+    # Evitar sobreposição vertical quando várias equipes tiverem a mesma posição:
+    dup_counts = df_last["Posição"].value_counts().to_dict()
+    seen_per_pos = {}
+    annotations = []
+    for _, row in df_last.iterrows():
+        pos = row["Posição"]
+        # quantos já posicionados nessa mesma posição
+        idx = seen_per_pos.get(pos, 0)
+        seen_per_pos[pos] = idx + 1
+        num_same = dup_counts.get(pos, 1)
+        # calcula offset centrado (se houver 3 iguais: -0.12, 0, +0.12)
+        offset = (idx - (num_same - 1) / 2) * 0.12
+
+        # texto mais curto para evitar corte; pode usar row['Time'] ou row['Time_Label']
+        texto = f"{row['Time']} — {int(row['Pontuação_Acumulada'])}"
+
+        annotations.append(dict(
+            x=row["Rodada"] + 0.15, #desloca um pouco à direita do último ponto
+            y=row["Posição"] + offset,
+            xref='x',
+            yref='y',
+            text=texto,
+            showarrow=False,
+            xanchor='left',
+            yanchor='middle',
+            font=dict(size=11, color='white'),
+            align='left',
+            bgcolor='rgba(0,0,0,0)',  # fundo transparente
+            bordercolor='rgba(0,0,0,0.1)',
+            borderwidth=0.5
+        ))
+
+    # adicionar anotações e margem direita maior (para garantir espaço)
+    # adicionar anotações e margem direita maior (para garantir espaço)
+    fig.update_layout(
+        annotations=annotations,
+        margin=dict(l=100, r=220, t=80, b=120),
+        width=1200,
+        height=700,
+        showlegend=False  # <<< remove a legenda
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
