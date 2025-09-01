@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-
 # libs do plotly
 import plotly.express as px
 
@@ -65,6 +64,20 @@ else:
         title="Ranking Progressivo do Cartolas"
     )
 
+    fig2 = px.line(
+    df_filtrado,
+    x="Rodada",
+    y="Posição",
+    facet_col="Time",
+    facet_col_wrap=3,
+    markers=True,
+    line_group="Time",
+    hover_data=["Pontuação", "Pontuação_Acumulada"],
+    title="Posição por Rodada - Small Multiples",
+    text="Posição"  # mostra a posição no ponto
+    )
+
+
     # permitir que elementos não sejam cortados
     for trace in fig.data:
         # garante que marcador/linha não sejam cortados pelo eixo
@@ -126,3 +139,18 @@ else:
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+    
+    # Inverter eixo Y (posição 1 no topo)
+    fig2.update_yaxes(autorange="reversed", dtick=2)  # menos linhas, intervalo maior
+
+    # Mostrar os valores sobre os pontos
+    fig2.update_traces(textposition="top center", textfont=dict(size=10, color='white'))
+
+    # Remover legenda e ajustar layout
+    fig2.update_layout(
+    showlegend=False,
+    margin=dict(l=50, r=50, t=80, b=50),
+    height=300 + 250 * (len(times_selecionados) // 3)
+    )
+    st.plotly_chart(fig2, use_container_width=True)
